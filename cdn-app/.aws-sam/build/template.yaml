@@ -1,0 +1,237 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: 'cdn-app
+
+  Sample SAM Template for cdn-app
+
+  '
+Globals:
+  Function:
+    Timeout: 3
+    MemorySize: 128
+Parameters:
+  DomainName:
+    Type: String
+    Description: The domain name
+    Default: nsncareer.com
+  PriceClass:
+    Type: String
+    Description: The CloudFront distribution price class
+    Default: PriceClass_All
+    AllowedValues:
+    - PriceClass_100
+    - PriceClass_200
+    - PriceClass_All
+Resources:
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Aliases:
+        - Ref: DomainName
+        - Fn::Sub: cloudfronturl.${DomainName}
+        - Fn::Sub: s3url.${DomainName}
+        CustomErrorResponses:
+        - ErrorCachingMinTTL: 60
+          ErrorCode: 404
+          ResponseCode: 404
+          ResponsePagePath: /404.html
+        DefaultCacheBehavior:
+          AllowedMethods:
+          - GET
+          - HEAD
+          CachedMethods:
+          - GET
+          - HEAD
+          Compress: true
+          DefaultTTL: 86400
+          ForwardedValues:
+            Cookies:
+              Forward: none
+            QueryString: true
+          MaxTTL: 31536000
+          SmoothStreaming: false
+          TargetOriginId:
+            Fn::Sub: S3-${AWS::StackName}-root
+          ViewerProtocolPolicy: redirect-to-https
+        DefaultRootObject: index.html
+        Enabled: true
+        HttpVersion: http2
+        IPV6Enabled: true
+        Origins:
+        - S3OriginConfig:
+            OriginAccessIdentity:
+              Fn::Join:
+              - ''
+              - - origin-access-identity/cloudfront/
+                - Ref: CloudFrontOriginAccessIdentity
+          DomainName:
+            Fn::GetAtt:
+            - S3MainBucket
+            - DomainName
+          Id:
+            Fn::Sub: S3-${AWS::StackName}-root
+        PriceClass: PriceClass_All
+        ViewerCertificate:
+          AcmCertificateArn:
+            Ref: CertificateManagerCertificate
+          MinimumProtocolVersion: TLSv1.1_2016
+          SslSupportMethod: sni-only
+  CertificateManagerCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName:
+        Ref: DomainName
+      ValidationMethod: EMAIL
+      SubjectAlternativeNames:
+      - Fn::Sub: cloudfronturl.${DomainName}
+      - Fn::Sub: s3url.${DomainName}
+      DomainValidationOptions:
+      - DomainName:
+          Fn::Sub: cloudfronturl.${DomainName}
+        ValidationDomain:
+          Ref: DomainName
+      - DomainName:
+          Fn::Sub: s3url.${DomainName}
+        ValidationDomain:
+          Ref: DomainName
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name:
+        Ref: DomainName
+      HostedZoneConfig:
+        Comment: This is cdn hosted zone.
+  CloudFrontOriginAccessIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment:
+          Fn::Sub: CloudFront OAI for ${DomainName}
+  Route53RecordSetGroup:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneName:
+        Fn::Sub: ${DomainName}.
+      RecordSets:
+      - Name:
+          Fn::Sub: cloudfronturl.${DomainName}.
+        Type: CNAME
+        TTL: '300'
+        SetIdentifier: Cloudfront_one
+        Weight: '140'
+        ResourceRecords:
+        - Fn::GetAtt:
+          - CloudFrontDistribution
+          - DomainName
+  S3MainBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName:
+        Fn::Sub: ${AWS::StackName}-s3mainbucket
+      LoggingConfiguration:
+        DestinationBucketName:
+          Ref: LoggingBucket
+        LogFilePrefix: testing-logs
+      WebsiteConfiguration:
+        ErrorDocument: 404.html
+        IndexDocument: index.html
+      MetricsConfigurations:
+      - Id: EntireBucket
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+  S3MainBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: S3MainBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Action:
+          - s3:GetObject
+          Effect: Allow
+          Principal:
+            AWS:
+              Fn::Sub: arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity
+                ${CloudFrontOriginAccessIdentity}
+          Resource:
+            Fn::Sub: ${S3MainBucket.Arn}/*
+  LoggingBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BucketName:
+        Fn::Sub: ${AWS::StackName}-s3loggingbucket
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+        - Id: InfrequentAccess
+          Status: Enabled
+          Transitions:
+          - TransitionInDays: 30
+            StorageClass: STANDARD_IA
+        - Id: DeepArchive
+          Status: Enabled
+          Transitions:
+          - TransitionInDays: 60
+            StorageClass: DEEP_ARCHIVE
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+  S3LoggingBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: LoggingBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Action:
+          - s3:PutObject
+          Effect: Allow
+          Principal:
+            Service: logging.s3.amazonaws.com
+          Resource:
+            Fn::Join:
+            - ''
+            - - 'arn:aws:s3:::'
+              - Ref: LoggingBucket
+              - /*
+          Condition:
+            ArnLike:
+              aws:SourceArn:
+                Fn::GetAtt:
+                - S3MainBucket
+                - Arn
+            StringEquals:
+              aws:SourceAccount:
+                Fn::Sub: ${AWS::AccountId}
+Outputs:
+  WebsiteURL:
+    Value:
+      Fn::GetAtt:
+      - S3MainBucket
+      - WebsiteURL
+    Description: URL for website hosted on S3
+  CloudfrontURL:
+    Value:
+      Fn::GetAtt:
+      - CloudFrontDistribution
+      - DomainName
+    Description: URL for Cloudfront
+  CloudFrontRoute53URL:
+    Value:
+      Fn::Sub: cloudfronturl.${DomainName}
+    Description: SSL URL for Route53-Cloudfront

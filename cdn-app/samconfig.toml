@@ -1,0 +1,13 @@
+version = 0.1
+[default]
+[default.deploy]
+[default.deploy.parameters]
+stack_name = "cdn-app"
+s3_bucket = "aws-sam-cli-managed-default-samclisourcebucket-1jxp83wcw6a9a"
+s3_prefix = "cdn-app"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+disable_rollback = true
+parameter_overrides = "DomainName=\"nsncareer.com\" PriceClass=\"PriceClass_All\""
+image_repositories = []
