@@ -1,0 +1,333 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  lambda@edge-app
+
+  Sample SAM Template for lambda@edge-app
+
+Parameters:
+  LogsRetentionInDays:
+    Description: 'Specifies the number of days you want to retain log events in the specified log group.'
+    Type: Number
+    Default: 1
+    AllowedValues: [ 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653 ]
+
+
+Globals:
+  Function:
+    Timeout: 3
+    MemorySize: 128
+    Environment:
+      Variables:
+        OLD_BUCKET_DOMAIN_NAME: !GetAtt S3OldBucket.DomainName
+        NEW_BUCKET_DOMAIN_NAME: !GetAtt S3NewBucket.DomainName
+
+
+Resources:
+
+#####################################################
+  # Viewer request role
+#####################################################
+  ViewerRequestRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - edgelambda.amazonaws.com
+            Action: sts:AssumeRole
+# You must create an IAM role that can be assumed by the service principals lambda.amazonaws.com and
+# edgelambda.amazonaws.com. This role is assumed by the service principals when they execute your function.
+#####################################################
+  # Viewer request lambda policy
+#####################################################
+  ViewerRequestLambdaPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Resource: !GetAtt ViewerRequestLogGroup.Arn
+      PolicyName: lambda
+      Roles:
+        - !Ref ViewerRequestRole
+# By default, whenever a CloudFront event triggers a Lambda function, data is written to CloudWatch Logs.
+# If you want to use these logs, the execution role needs permission to write data to CloudWatch Logs
+#####################################################
+  # Viewer request lambda policy
+#####################################################
+  ViewerRequestLambdaEdgePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: logs:CreateLogGroup
+            Resource: !Sub 'arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/lambda/us-east-1.${ViewerRequestFunction}:log-stream:'
+          - Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub 'arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/lambda/us-east-1.${ViewerRequestFunction}:log-stream:*'
+      PolicyName: lambda-edge
+      Roles:
+        - !Ref ViewerRequestRole
+#####################################################
+  # Viewer request log group
+#####################################################
+  ViewerRequestLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ViewerRequestFunction}'
+      RetentionInDays: !Ref LogsRetentionInDays
+#####################################################
+  # Lambda version
+#####################################################
+  ViewerRequestVersionV1:
+    Type: 'AWS::Lambda::Version'
+    Properties:
+      FunctionName: !Ref ViewerRequestFunction
+# Allows you to create a new lambda function version
+#####################################################
+  # Origin request role
+#####################################################
+  OriginRequestRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - edgelambda.amazonaws.com
+            Action: sts:AssumeRole
+#####################################################
+  # Origin request lambda policy
+#####################################################
+  OriginRequestLambdaPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !GetAtt OriginRequestLogGroup.Arn
+      PolicyName: lambda
+      Roles:
+        - !Ref OriginRequestRole
+#####################################################
+  # Origin request lambda@edge policy
+#####################################################
+  OriginRequestLambdaEdgePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: logs:CreateLogGroup
+            Resource: !Sub 'arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/lambda/us-east-1.${OriginRequestFunction}:log-stream:'
+          - Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub 'arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/lambda/us-east-1.${OriginRequestFunction}:log-stream:*'
+      PolicyName: lambda-edge
+      Roles:
+        - !Ref OriginRequestRole
+#####################################################
+  # Origin request log group
+#####################################################
+  OriginRequestLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${OriginRequestFunction}
+      RetentionInDays: !Ref LogsRetentionInDays
+#####################################################
+  # Origin version
+#####################################################
+  OriginRequestVersionV1:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref OriginRequestFunction
+#############################################################
+  # new bucket for hosting our static website
+#############################################################
+  S3NewBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-s3newbucket
+      WebsiteConfiguration:
+        ErrorDocument: 404.html
+        IndexDocument: index.html
+      MetricsConfigurations:
+        - Id: EntireBucket
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+#############################################################
+  # Old bucket for hosting our static website
+#############################################################
+  S3OldBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-s3oldbucket
+      WebsiteConfiguration:
+        ErrorDocument: 404.html
+        IndexDocument: index.html
+      MetricsConfigurations:
+        - Id: EntireBucket
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+#############################################################
+  # Bucket policy for new bucket
+#############################################################
+  S3NewBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3NewBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - s3:GetObject
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${CloudFrontOriginAccessIdentity}'
+            Resource: !Sub ${S3NewBucket.Arn}/*
+#############################################################
+  # Bucket policy for new bucket
+#############################################################
+  S3OldBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3OldBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - s3:GetObject
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${CloudFrontOriginAccessIdentity}'
+            Resource: !Sub ${S3OldBucket.Arn}/*
+#####################################################
+  # Cloudfront distribution origin access
+#####################################################
+  CloudFrontOriginAccessIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: Access for cloudfront
+#####################################################
+  # Cloudfront distribution
+#####################################################
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        CustomErrorResponses:
+          - ErrorCachingMinTTL: 60
+            ErrorCode: 404
+            ResponseCode: 404
+            ResponsePagePath: /404.html
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          DefaultTTL: 5
+          ForwardedValues:
+            Cookies:
+              Forward: whitelist
+              WhitelistedNames:
+                - version
+            QueryString: true
+            Headers:
+              - 'lambdaatedge'
+          MaxTTL: 31536000
+          SmoothStreaming: false
+          TargetOriginId: !Sub S3-${AWS::StackName}-root
+          ViewerProtocolPolicy: redirect-to-https
+          LambdaFunctionAssociations:
+            - EventType: 'origin-request'
+              IncludeBody: true
+              LambdaFunctionARN:
+                !Join
+                - ':'
+                - - !GetAtt [OriginRequestFunction,Arn]
+                  - !GetAtt [OriginRequestVersionV1,Version]
+#          LambdaFunctionAssociations:
+#            - EventType: origin-request
+#              LambdaFunctionARN: !Sub "arn:aws:lambda:us-east-1:${AWS::AccountId}:function:${OriginRequestFunction}:${OriginRequestVersionV1}"
+        DefaultRootObject: index.html
+        Enabled: true
+        HttpVersion: http2
+        IPV6Enabled: true
+        Origins:
+          - S3OriginConfig:
+              OriginAccessIdentity: !Join [ "", [ "origin-access-identity/cloudfront/", !Ref CloudFrontOriginAccessIdentity ] ]
+            DomainName: !GetAtt S3OldBucket.DomainName
+            Id: !Sub S3-${AWS::StackName}-root
+        PriceClass: PriceClass_100
+#####################################################
+  # Viewer request lambda function
+#####################################################
+  ViewerRequestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: viewer_request.lambda_handler
+      Runtime: python3.9
+      Role: !GetAtt ViewerRequestRole.Arn
+      Architectures:
+        - x86_64
+# Lambda@Edge is a service that allows Lambda functions to be run at CloudFront edge locations around the
+# world, providing the opportunity to modify incoming requests or outgoing responses, before or after they
+# reach CloudFront.
+#####################################################
+  # Origin request lambda function
+#####################################################
+  OriginRequestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: origin_request.lambda_handler
+      Runtime: python3.9
+      Role: !GetAtt OriginRequestRole.Arn
+      Architectures:
+        - x86_64
+#####################################################
+
+Outputs:
+  ViewerRequestLambdaEdgeFunctionVersionARN:
+    Description: 'Version ARN of Lambda@Edge viewer request function.'
+    Value: !Ref ViewerRequestVersionV1
+  OriginRequestLambdaEdgeFunctionVersionARN:
+    Description: 'Version ARN of Lambda@Edge origin request function.'
+    Value: !Ref OriginRequestVersionV1
+  CloudfrontURL:
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Description: URL for Cloudfront
